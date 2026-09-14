@@ -7,13 +7,7 @@
     {
       "binding": "DB",
       "database_name": "crypto_tracker",
-      "database_id": "ضع-DATABASE-ID-هنا"
+      "database_id": "81eeced8-4378-4369-bf2c-2a3a87bcd9ca"
     }
-  ],
-
-  "triggers": {
-    "crons": [
-      "*/15 * * * *"
-    ]
-  }
+  ]
 }
