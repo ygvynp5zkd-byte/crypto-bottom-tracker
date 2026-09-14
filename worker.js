@@ -25,6 +25,15 @@ const COINS = [
   "TIAUSDT"
 ];
 
+const BATCH_SIZE = 3;
+const DELAY_BETWEEN_BATCHES = 1500;
+const MAX_RETRIES = 3;
+
+
+// ============================================================
+// WORKER
+// ============================================================
+
 export default {
 
   async fetch(request, env) {
@@ -51,29 +60,35 @@ export default {
 
         const results = [];
 
-        for (const symbol of COINS) {
+        for (
+          let start = 0;
+          start < COINS.length;
+          start += BATCH_SIZE
+        ) {
 
-          try {
+          const batch =
+            COINS.slice(
+              start,
+              start + BATCH_SIZE
+            );
 
-            const candles =
-              await getCandles(symbol);
+          const batchResults =
+            await Promise.all(
+              batch.map(
+                symbol => checkCoin(symbol)
+              )
+            );
 
-            results.push({
-              symbol: symbol,
-              status: "OK",
-              candles: candles.length,
-              price: candles.length
-                ? candles[candles.length - 1].close
-                : null
-            });
+          results.push(...batchResults);
 
-          } catch (error) {
+          if (
+            start + BATCH_SIZE <
+            COINS.length
+          ) {
 
-            results.push({
-              symbol: symbol,
-              status: "ERROR",
-              error: error.message
-            });
+            await sleep(
+              DELAY_BETWEEN_BATCHES
+            );
 
           }
 
@@ -86,11 +101,13 @@ export default {
           checked: COINS.length,
           results: results
         });
+
       }
 
-      return new Response("Not Found", {
-        status: 404
-      });
+      return new Response(
+        "Not Found",
+        { status: 404 }
+      );
 
     } catch (error) {
 
@@ -100,18 +117,248 @@ export default {
       }, 500);
 
     }
+
   },
 
 
   async scheduled(event, env, ctx) {
 
     ctx.waitUntil(
-      testRun(env)
+      scheduledRun(env)
     );
 
   }
 
 };
+
+
+// ============================================================
+// CHECK ONE COIN
+// ============================================================
+
+async function checkCoin(symbol) {
+
+  try {
+
+    const candles =
+      await getCandlesWithRetry(symbol);
+
+    return {
+
+      symbol: symbol,
+
+      status: "OK",
+
+      candles: candles.length,
+
+      price:
+        candles.length > 0
+          ? candles[candles.length - 1].close
+          : null
+
+    };
+
+  } catch (error) {
+
+    return {
+
+      symbol: symbol,
+
+      status: "ERROR",
+
+      error: error.message
+
+    };
+
+  }
+
+}
+
+
+// ============================================================
+// OKX REQUEST WITH RETRY
+// ============================================================
+
+async function getCandlesWithRetry(symbol) {
+
+  let lastError =
+    "Unknown error";
+
+  for (
+    let attempt = 1;
+    attempt <= MAX_RETRIES;
+    attempt++
+  ) {
+
+    try {
+
+      return await getCandles(symbol);
+
+    } catch (error) {
+
+      lastError =
+        error.message;
+
+      if (
+        !lastError.includes("429")
+      ) {
+
+        throw error;
+
+      }
+
+      if (
+        attempt < MAX_RETRIES
+      ) {
+
+        const waitTime =
+          2000 * attempt;
+
+        await sleep(waitTime);
+
+      }
+
+    }
+
+  }
+
+  throw new Error(
+    lastError
+  );
+
+}
+
+
+// ============================================================
+// GET OKX CANDLES
+// ============================================================
+
+async function getCandles(symbol) {
+
+  const base =
+    symbol.replace("USDT", "");
+
+  const instId =
+    base + "-USDT";
+
+  const url =
+    "https://www.okx.com/api/v5/market/candles" +
+    "?instId=" +
+    encodeURIComponent(instId) +
+    "&bar=15m" +
+    "&limit=130";
+
+  const response =
+    await fetch(url, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json"
+      }
+    });
+
+  if (!response.ok) {
+
+    throw new Error(
+      "OKX HTTP " +
+      response.status
+    );
+
+  }
+
+  const data =
+    await response.json();
+
+  if (
+    !data ||
+    data.code !== "0"
+  ) {
+
+    throw new Error(
+      "OKX: " +
+      (
+        data &&
+        data.msg
+          ? data.msg
+          : "API error"
+      )
+    );
+
+  }
+
+  if (
+    !Array.isArray(data.data)
+  ) {
+
+    throw new Error(
+      "Invalid OKX candle data"
+    );
+
+  }
+
+  const rows =
+    [...data.data].reverse();
+
+  const candles = [];
+
+  for (const row of rows) {
+
+    if (
+      !Array.isArray(row) ||
+      row.length < 9
+    ) {
+      continue;
+    }
+
+    /*
+      OKX:
+      row[8] = confirmation
+      1 = closed
+      0 = still forming
+    */
+
+    if (
+      String(row[8]) !== "1"
+    ) {
+      continue;
+    }
+
+    const candle = {
+
+      timestamp:
+        Number(row[0]),
+
+      open:
+        Number(row[1]),
+
+      high:
+        Number(row[2]),
+
+      low:
+        Number(row[3]),
+
+      close:
+        Number(row[4]),
+
+      volume:
+        Number(row[5])
+
+    };
+
+    if (
+      !Number.isFinite(
+        candle.close
+      )
+    ) {
+      continue;
+    }
+
+    candles.push(candle);
+
+  }
+
+  return candles;
+
+}
 
 
 // ============================================================
@@ -135,125 +382,23 @@ async function initDatabase(env) {
 
 
 // ============================================================
-// OKX
+// SCHEDULED TEST
 // ============================================================
 
-async function getCandles(symbol) {
-
-  const base =
-    symbol.replace("USDT", "");
-
-  const instId =
-    base + "-USDT";
-
-  const url =
-    "https://www.okx.com/api/v5/market/candles" +
-    "?instId=" +
-    encodeURIComponent(instId) +
-    "&bar=15m" +
-    "&limit=130";
-
-  const response =
-    await fetch(url);
-
-  if (!response.ok) {
-
-    throw new Error(
-      "OKX HTTP " + response.status
-    );
-
-  }
-
-  const data =
-    await response.json();
-
-  if (data.code !== "0") {
-
-    throw new Error(
-      "OKX: " +
-      (data.msg || "API error")
-    );
-
-  }
-
-  if (!Array.isArray(data.data)) {
-
-    throw new Error(
-      "Invalid OKX candle data"
-    );
-
-  }
-
-  const rows =
-    [...data.data].reverse();
-
-  const candles = [];
-
-  for (const row of rows) {
-
-    if (!Array.isArray(row)) {
-      continue;
-    }
-
-    if (row.length < 9) {
-      continue;
-    }
-
-    const confirmed =
-      String(row[8]) === "1";
-
-    if (!confirmed) {
-      continue;
-    }
-
-    candles.push({
-
-      timestamp: Number(row[0]),
-
-      open: Number(row[1]),
-
-      high: Number(row[2]),
-
-      low: Number(row[3]),
-
-      close: Number(row[4]),
-
-      volume: Number(row[5])
-
-    });
-
-  }
-
-  return candles;
-
-}
-
-
-// ============================================================
-// TEST RUN
-// ============================================================
-
-async function testRun(env) {
+async function scheduledRun(env) {
 
   try {
 
     await initDatabase(env);
 
-    const symbol = "BTCUSDT";
-
-    const candles =
-      await getCandles(symbol);
-
     console.log(
-      "OKX TEST",
-      symbol,
-      candles.length
+      "Scheduled OKX test started"
     );
 
   } catch (error) {
 
     console.log(
-      "TEST ERROR",
+      "Scheduled error:",
       error.message
     );
 
@@ -263,10 +408,25 @@ async function testRun(env) {
 
 
 // ============================================================
-// JSON
+// HELPERS
 // ============================================================
 
-function json(data, status = 200) {
+function sleep(ms) {
+
+  return new Promise(
+    resolve => setTimeout(
+      resolve,
+      ms
+    )
+  );
+
+}
+
+
+function json(
+  data,
+  status = 200
+) {
 
   return new Response(
     JSON.stringify(
