@@ -4,13 +4,10 @@ const COINS = [
   "DOT", "SHIB", "UNI", "AAVE", "NEAR", "ATOM",
   "FIL", "ARB", "OP", "INJ", "SEI", "TIA"
 ];
-
 const CANDLE_COUNT = 130;
-
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-
     // الصفحة الرئيسية
     if (url.pathname === "/") {
       return json({
@@ -20,22 +17,17 @@ export default {
         candles_required: CANDLE_COUNT
       });
     }
-
     // اختبار العملات
     if (url.pathname === "/run") {
       const results = [];
-
       for (const coin of COINS) {
         const result = await testCoin(coin);
         results.push(result);
-
-        // تأخير صغير لتجنب rate limit
+        // تأخير صغير لتجنب Rate Limit
         await sleep(250);
       }
-
       const working = results.filter(x => x.status === "OK");
       const failed = results.filter(x => x.status !== "OK");
-
       return json({
         ok: true,
         source: "Coinbase Exchange",
@@ -46,35 +38,28 @@ export default {
         results
       });
     }
-
     return new Response("Not Found", { status: 404 });
   }
 };
-
-
 async function testCoin(coin) {
-
   const product = `${coin}-USD`;
-
-  // آخر 32.5 ساعة تقريباً
-  // 130 × 15 دقيقة = 1950 دقيقة
+  // 130 شمعة × 15 دقيقة
   const end = Math.floor(Date.now() / 1000);
   const start = end - (CANDLE_COUNT * 15 * 60);
-
+  // Coinbase يحتاج ISO 8601 للتاريخ
+  const startISO = new Date(start * 1000).toISOString();
+  const endISO = new Date(end * 1000).toISOString();
   const endpoint =
     `https://api.exchange.coinbase.com/products/${product}/candles` +
     `?granularity=900` +
-    `&start=${start}` +
-    `&end=${end}`;
-
+    `&start=${encodeURIComponent(startISO)}` +
+    `&end=${encodeURIComponent(endISO)}`;
   try {
-
     const response = await fetch(endpoint, {
       headers: {
         "Accept": "application/json"
       }
     });
-
     if (!response.ok) {
       return {
         coin,
@@ -85,9 +70,7 @@ async function testCoin(coin) {
         message: `HTTP ${response.status}`
       };
     }
-
     const data = await response.json();
-
     if (!Array.isArray(data) || data.length === 0) {
       return {
         coin,
@@ -98,10 +81,8 @@ async function testCoin(coin) {
         message: "No candle data"
       };
     }
-
-    // Coinbase يعيد:
+    // Coinbase candle format:
     // [time, low, high, open, close, volume]
-
     const candles = data
       .map(c => ({
         time: Number(c[0]),
@@ -112,9 +93,7 @@ async function testCoin(coin) {
         volume: Number(c[5])
       }))
       .sort((a, b) => a.time - b.time);
-
     const last = candles[candles.length - 1];
-
     return {
       coin,
       product,
@@ -124,9 +103,7 @@ async function testCoin(coin) {
       last_close: last.close,
       last_candle: new Date(last.time * 1000).toISOString()
     };
-
   } catch (error) {
-
     return {
       coin,
       product,
@@ -137,13 +114,9 @@ async function testCoin(coin) {
     };
   }
 }
-
-
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
-
-
 function json(data) {
   return new Response(
     JSON.stringify(data, null, 2),
