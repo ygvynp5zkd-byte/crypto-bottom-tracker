@@ -978,4 +978,4 @@ async function processCoin(
 
     return {
       symbol,
-      status: "NEW BUY
+      status: "NEW BUY",
