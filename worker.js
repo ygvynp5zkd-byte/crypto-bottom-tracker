@@ -1,12 +1,32 @@
 const COINS = [
-  "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","LINKUSDT",
-  "AVAXUSDT","SUIUSDT","LTCUSDT","DOGEUSDT","ADAUSDT","TRXUSDT",
-  "DOTUSDT","SHIBUSDT","UNIUSDT","AAVEUSDT","NEARUSDT","ATOMUSDT",
-  "FILUSDT","ARBUSDT","OPUSDT","INJUSDT","SEIUSDT","TIAUSDT"
+  "BTCUSDT",
+  "ETHUSDT",
+  "BNBUSDT",
+  "SOLUSDT",
+  "XRPUSDT",
+  "LINKUSDT",
+  "AVAXUSDT",
+  "SUIUSDT",
+  "LTCUSDT",
+  "DOGEUSDT",
+  "ADAUSDT",
+  "TRXUSDT",
+  "DOTUSDT",
+  "SHIBUSDT",
+  "UNIUSDT",
+  "AAVEUSDT",
+  "NEARUSDT",
+  "ATOMUSDT",
+  "FILUSDT",
+  "ARBUSDT",
+  "OPUSDT",
+  "INJUSDT",
+  "SEIUSDT",
+  "TIAUSDT"
 ];
 
-const TAKE_PROFIT = 0.02;
-const STOP_LOSS = 0.015;
+const TP_PERCENT = 2.0;
+const SL_PERCENT = 1.5;
 
 const LOOKBACK_24 = 96;
 const BOTTOM_ZONE = 20.0;
@@ -18,9 +38,11 @@ const BOTTOM_TOLERANCE = 1.0;
 const MIN_BOTTOM_TESTS = 2;
 
 const RSI_LENGTH = 14;
-const RSI_MAX = 50;
+const RSI_MAX = 50.0;
 
 const EMA_FAST_LENGTH = 20;
+const EMA_SLOW_LENGTH = 50;
+
 const VOLUME_LENGTH = 20;
 const VOLUME_MULTIPLIER = 1.1;
 
@@ -28,263 +50,258 @@ const REQUIRED_SCORE = 5;
 
 
 // ============================================================
-// SMA
+// CLOUDFLARE WORKER
 // ============================================================
 
-function sma(values, length) {
-  if (values.length < length) return null;
+export default {
+  async fetch(request, env) {
+    try {
+      await initDatabase(env);
 
-  let sum = 0;
+      const url = new URL(request.url);
 
-  for (let i = values.length - length; i < values.length; i++) {
-    sum += values[i];
-  }
-
-  return sum / length;
-}
-
-
-// ============================================================
-// EMA
-// ============================================================
-
-function emaSeries(values, length) {
-  const result = new Array(values.length).fill(null);
-
-  if (values.length < length) return result;
-
-  let sum = 0;
-
-  for (let i = 0; i < length; i++) {
-    sum += values[i];
-  }
-
-  result[length - 1] = sum / length;
-
-  const multiplier = 2 / (length + 1);
-
-  for (let i = length; i < values.length; i++) {
-    result[i] =
-      (values[i] - result[i - 1]) * multiplier +
-      result[i - 1];
-  }
-
-  return result;
-}
-
-
-// ============================================================
-// RSI
-// ============================================================
-
-function rsiSeries(values, length) {
-  const result = new Array(values.length).fill(null);
-
-  if (values.length <= length) return result;
-
-  let gains = 0;
-  let losses = 0;
-
-  for (let i = 1; i <= length; i++) {
-    const change = values[i] - values[i - 1];
-
-    if (change > 0) {
-      gains += change;
-    } else {
-      losses += Math.abs(change);
-    }
-  }
-
-  let avgGain = gains / length;
-  let avgLoss = losses / length;
-
-  result[length] =
-    avgLoss === 0
-      ? 100
-      : 100 - 100 / (1 + avgGain / avgLoss);
-
-  for (let i = length + 1; i < values.length; i++) {
-
-    const change = values[i] - values[i - 1];
-
-    const gain = change > 0 ? change : 0;
-    const loss = change < 0 ? Math.abs(change) : 0;
-
-    avgGain =
-      (avgGain * (length - 1) + gain) / length;
-
-    avgLoss =
-      (avgLoss * (length - 1) + loss) / length;
-
-    result[i] =
-      avgLoss === 0
-        ? 100
-        : 100 - 100 / (1 + avgGain / avgLoss);
-  }
-
-  return result;
-}
-
-
-// ============================================================
-// LOWEST
-// ============================================================
-
-function lowest(values, length, endIndex) {
-
-  const start =
-    Math.max(0, endIndex - length + 1);
-
-  let result = Infinity;
-
-  for (let i = start; i <= endIndex; i++) {
-    if (values[i] < result) {
-      result = values[i];
-    }
-  }
-
-  return result;
-}
-
-
-// ============================================================
-// HIGHEST
-// ============================================================
-
-function highest(values, length, endIndex) {
-
-  const start =
-    Math.max(0, endIndex - length + 1);
-
-  let result = -Infinity;
-
-  for (let i = start; i <= endIndex; i++) {
-    if (values[i] > result) {
-      result = values[i];
-    }
-  }
-
-  return result;
-}
-
-
-// ============================================================
-// MACD
-// ============================================================
-
-function macdSeries(values) {
-
-  const fast = emaSeries(values, 12);
-  const slow = emaSeries(values, 26);
-
-  const macd = new Array(values.length).fill(null);
-
-  for (let i = 0; i < values.length; i++) {
-
-    if (
-      fast[i] !== null &&
-      slow[i] !== null
-    ) {
-      macd[i] = fast[i] - slow[i];
-    }
-  }
-
-  const signal = new Array(values.length).fill(null);
-
-  const validMacd = [];
-  const validIndexes = [];
-
-  for (let i = 0; i < macd.length; i++) {
-
-    if (macd[i] !== null) {
-      validMacd.push(macd[i]);
-      validIndexes.push(i);
-    }
-  }
-
-  if (validMacd.length >= 9) {
-
-    const signalValues =
-      emaSeries(validMacd, 9);
-
-    for (let i = 0; i < signalValues.length; i++) {
-
-      if (signalValues[i] !== null) {
-
-        signal[validIndexes[i]] =
-          signalValues[i];
+      if (url.pathname === "/") {
+        return json({
+          ok: true,
+          service: "24H Bottom Recovery V2.4",
+          source: "OKX",
+          timeframe: "15m",
+          coins: COINS.length
+        });
       }
+
+      if (url.pathname === "/run") {
+        const result = await runTracker(env);
+
+        return json(result);
+      }
+
+      return new Response("Not Found", { status: 404 });
+
+    } catch (error) {
+      return json({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      }, 500);
     }
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runTracker(env));
   }
+};
 
-  const histogram =
-    new Array(values.length).fill(null);
 
-  for (let i = 0; i < values.length; i++) {
+// ============================================================
+// MAIN TRACKER
+// ============================================================
 
-    if (
-      macd[i] !== null &&
-      signal[i] !== null
-    ) {
-      histogram[i] =
-        macd[i] - signal[i];
+async function runTracker(env) {
+
+  await initDatabase(env);
+
+  const results = [];
+
+  for (const symbol of COINS) {
+
+    try {
+
+      const candles = await getOKXCandles(symbol);
+
+      if (!candles || candles.length < 100) {
+        results.push({
+          symbol,
+          status: "ERROR",
+          error: "Not enough candle data"
+        });
+
+        continue;
+      }
+
+      const analysis = analyzeV24(candles);
+
+      const result = await updateTrade(
+        env,
+        symbol,
+        analysis,
+        candles
+      );
+
+      results.push({
+        symbol,
+        ...analysis.summary,
+        ...result
+      });
+
+    } catch (error) {
+
+      results.push({
+        symbol,
+        status: "ERROR",
+        error: error instanceof Error
+          ? error.message
+          : String(error)
+      });
+
     }
   }
 
   return {
-    macd,
-    signal,
-    histogram
+    ok: true,
+    checked: COINS.length,
+    source: "OKX",
+    timeframe: "15m",
+    timestamp: Date.now(),
+    results
   };
 }
 
 
 // ============================================================
-// V2.4 BUY SIGNAL
+// OKX DATA
 // ============================================================
 
-function calculateBuySignal(candles) {
+async function getOKXCandles(symbol) {
+
+  const base = symbol.replace("USDT", "");
+
+  const instId = `${base}-USDT`;
+
+  const url =
+    `https://www.okx.com/api/v5/market/candles` +
+    `?instId=${encodeURIComponent(instId)}` +
+    `&bar=15m` +
+    `&limit=130`;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`OKX ${symbol}: HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (!data || data.code !== "0") {
+    throw new Error(
+      `OKX ${symbol}: ${data?.msg || "API error"}`
+    );
+  }
+
+  if (!Array.isArray(data.data)) {
+    throw new Error(`OKX ${symbol}: invalid candle data`);
+  }
+
+  /*
+    OKX candles are returned newest -> oldest.
+
+    We reverse them so:
+    index 0 = oldest
+    last index = newest
+  */
+
+  const rows = [...data.data].reverse();
+
+  const candles = [];
+
+  for (const row of rows) {
+
+    if (!Array.isArray(row) || row.length < 9) {
+      continue;
+    }
+
+    const timestamp = Number(row[0]);
+    const open = Number(row[1]);
+    const high = Number(row[2]);
+    const low = Number(row[3]);
+    const close = Number(row[4]);
+    const volume = Number(row[5]);
+
+    /*
+      OKX row[8]:
+      1 = confirmed/closed candle
+      0 = still forming
+    */
+
+    const confirmed = String(row[8]) === "1";
+
+    if (
+      !Number.isFinite(timestamp) ||
+      !Number.isFinite(open) ||
+      !Number.isFinite(high) ||
+      !Number.isFinite(low) ||
+      !Number.isFinite(close) ||
+      !Number.isFinite(volume)
+    ) {
+      continue;
+    }
+
+    if (!confirmed) {
+      continue;
+    }
+
+    candles.push({
+      timestamp,
+      open,
+      high,
+      low,
+      close,
+      volume
+    });
+  }
+
+  return candles;
+}
+
+
+// ============================================================
+// V2.4 ANALYSIS
+// ============================================================
+
+function analyzeV24(candles) {
 
   const n = candles.length;
 
-  if (n < 120) {
-    return false;
+  if (n < 100) {
+    throw new Error("Insufficient candles");
   }
-
-  const opens =
-    candles.map(c => c.open);
-
-  const highs =
-    candles.map(c => c.high);
-
-  const lows =
-    candles.map(c => c.low);
-
-  const closes =
-    candles.map(c => c.close);
-
-  const volumes =
-    candles.map(c => c.volume);
 
   const i = n - 1;
 
+  const close = candles[i].close;
+  const open = candles[i].open;
+  const high = candles[i].high;
+  const low = candles[i].low;
 
   // ----------------------------------------------------------
   // 24H RANGE
   // ----------------------------------------------------------
 
-  const lowest24 =
-    lowest(lows, LOOKBACK_24, i);
+  const start24 = Math.max(0, i - LOOKBACK_24 + 1);
 
-  const highest24 =
-    highest(highs, LOOKBACK_24, i);
+  let lowest24 = Infinity;
+  let highest24 = -Infinity;
 
-  const range24 =
-    highest24 - lowest24;
+  for (let j = start24; j <= i; j++) {
+
+    if (candles[j].low < lowest24) {
+      lowest24 = candles[j].low;
+    }
+
+    if (candles[j].high > highest24) {
+      highest24 = candles[j].high;
+    }
+  }
+
+  const range24 = highest24 - lowest24;
 
   const distanceFromLow =
     range24 > 0
-      ? ((closes[i] - lowest24) / range24) * 100
+      ? ((close - lowest24) / range24) * 100
       : 100;
 
   const nearBottom =
@@ -295,19 +312,16 @@ function calculateBuySignal(candles) {
   // 24H CHANGE
   // ----------------------------------------------------------
 
-  const pastIndex =
-    i - LOOKBACK_24;
-
-  if (pastIndex < 0) {
-    return false;
-  }
+  const pastIndex = i - LOOKBACK_24;
 
   const pricePast =
-    closes[pastIndex];
+    pastIndex >= 0
+      ? candles[pastIndex].close
+      : null;
 
   const change24 =
-    pricePast !== 0
-      ? ((closes[i] - pricePast) / pricePast) * 100
+    pricePast !== null && pricePast !== 0
+      ? ((close - pricePast) / pricePast) * 100
       : 0;
 
   const strongDrop =
@@ -319,49 +333,26 @@ function calculateBuySignal(candles) {
   // RECENT BOTTOM
   // ----------------------------------------------------------
 
-  const recentLow =
-    lowest(
-      lows,
-      BOTTOM_LOOKBACK,
-      i
-    );
+  const bottomStart =
+    Math.max(0, i - BOTTOM_LOOKBACK + 1);
+
+  let recentLow = Infinity;
+
+  for (let j = bottomStart; j <= i; j++) {
+
+    if (candles[j].low < recentLow) {
+      recentLow = candles[j].low;
+    }
+  }
 
   const bottomReference =
-    recentLow *
-    (1 + BOTTOM_TOLERANCE / 100);
-
-  const nearRecentBottom =
-    lows[i] <= bottomReference;
-
-
-  // ----------------------------------------------------------
-  // BOTTOM TESTS
-  // ----------------------------------------------------------
+    recentLow * (1 + BOTTOM_TOLERANCE / 100);
 
   let bottomTests = 0;
 
-  const start =
-    Math.max(
-      0,
-      i - BOTTOM_LOOKBACK + 1
-    );
+  for (let j = bottomStart; j <= i; j++) {
 
-  for (let j = start; j <= i; j++) {
-
-    const historicalRecentLow =
-      lowest(
-        lows,
-        BOTTOM_LOOKBACK,
-        j
-      );
-
-    const historicalReference =
-      historicalRecentLow *
-      (1 + BOTTOM_TOLERANCE / 100);
-
-    if (
-      lows[j] <= historicalReference
-    ) {
+    if (candles[j].low <= bottomReference) {
       bottomTests++;
     }
   }
@@ -369,48 +360,44 @@ function calculateBuySignal(candles) {
   const qualityBottom =
     bottomTests >= MIN_BOTTOM_TESTS;
 
+  const nearRecentBottom =
+    low <= recentLow * (1 + BOTTOM_TOLERANCE / 100);
+
 
   // ----------------------------------------------------------
   // BOTTOM REJECTION
   // ----------------------------------------------------------
 
-  const candleRange =
-    highs[i] - lows[i];
+  const candleRange = high - low;
 
   const lowerWick =
-    Math.min(
-      opens[i],
-      closes[i]
-    ) - lows[i];
+    Math.min(open, close) - low;
 
   const lowerWickPercent =
     candleRange > 0
-      ? lowerWick / candleRange * 100
+      ? (lowerWick / candleRange) * 100
       : 0;
 
   const bottomRejection =
     candleRange > 0 &&
     lowerWickPercent >= 35 &&
-    closes[i] >
-      lows[i] + candleRange * 0.55;
+    close > low + candleRange * 0.55;
 
 
   // ----------------------------------------------------------
   // SELLING PRESSURE
   // ----------------------------------------------------------
 
+  const previous = candles[i - 1];
+
   const body =
-    Math.abs(
-      closes[i] - opens[i]
-    );
+    Math.abs(close - open);
 
   const bodyPrevious =
-    Math.abs(
-      closes[i - 1] - opens[i - 1]
-    );
+    Math.abs(previous.close - previous.open);
 
   const sellingPressureWeakening =
-    closes[i] > closes[i - 1] &&
+    close > previous.close &&
     body <= bodyPrevious * 1.5;
 
 
@@ -418,26 +405,26 @@ function calculateBuySignal(candles) {
   // RSI
   // ----------------------------------------------------------
 
-  const rsi =
-    rsiSeries(
-      closes,
-      RSI_LENGTH
-    );
+  const rsiValues = calculateRSI(
+    candles,
+    RSI_LENGTH
+  );
 
-  const currentRSI =
-    rsi[i];
+  const rsi = rsiValues[i];
 
-  const previousRSI =
-    rsi[i - 2];
+  const rsiTwoBarsAgo =
+    i >= 2
+      ? rsiValues[i - 2]
+      : null;
 
   const rsiRising =
-    currentRSI !== null &&
-    previousRSI !== null &&
-    currentRSI > previousRSI;
+    Number.isFinite(rsi) &&
+    Number.isFinite(rsiTwoBarsAgo) &&
+    rsi > rsiTwoBarsAgo;
 
   const rsiCondition =
-    currentRSI !== null &&
-    currentRSI <= RSI_MAX &&
+    Number.isFinite(rsi) &&
+    rsi <= RSI_MAX &&
     rsiRising;
 
 
@@ -446,25 +433,33 @@ function calculateBuySignal(candles) {
   // ----------------------------------------------------------
 
   const emaFastValues =
-    emaSeries(
-      closes,
+    calculateEMA(
+      candles,
       EMA_FAST_LENGTH
     );
 
-  const emaFast =
-    emaFastValues[i];
+  const emaSlowValues =
+    calculateEMA(
+      candles,
+      EMA_SLOW_LENGTH
+    );
 
-  const emaFastPrevious =
-    emaFastValues[i - 2];
+  const emaFast = emaFastValues[i];
+  const emaSlow = emaSlowValues[i];
+
+  const emaFastTwoBarsAgo =
+    i >= 2
+      ? emaFastValues[i - 2]
+      : null;
 
   const emaRecovery =
-    emaFast !== null &&
-    closes[i] > emaFast;
+    Number.isFinite(emaFast) &&
+    close > emaFast;
 
   const emaTurningUp =
-    emaFast !== null &&
-    emaFastPrevious !== null &&
-    emaFast > emaFastPrevious;
+    Number.isFinite(emaFast) &&
+    Number.isFinite(emaFastTwoBarsAgo) &&
+    emaFast > emaFastTwoBarsAgo;
 
 
   // ----------------------------------------------------------
@@ -472,29 +467,33 @@ function calculateBuySignal(candles) {
   // ----------------------------------------------------------
 
   const macd =
-    macdSeries(closes);
+    calculateMACD(candles);
+
+  const macdHist =
+    macd.histogram[i];
+
+  const macdHistPrevious =
+    i >= 1
+      ? macd.histogram[i - 1]
+      : null;
 
   const macdLine =
     macd.macd[i];
 
-  const previousMacdLine =
-    macd.macd[i - 1];
-
-  const histogram =
-    macd.histogram[i];
-
-  const previousHistogram =
-    macd.histogram[i - 1];
+  const macdLinePrevious =
+    i >= 1
+      ? macd.macd[i - 1]
+      : null;
 
   const macdImproving =
-    histogram !== null &&
-    previousHistogram !== null &&
-    histogram > previousHistogram;
+    Number.isFinite(macdHist) &&
+    Number.isFinite(macdHistPrevious) &&
+    macdHist > macdHistPrevious;
 
   const macdTurningUp =
-    macdLine !== null &&
-    previousMacdLine !== null &&
-    macdLine > previousMacdLine;
+    Number.isFinite(macdLine) &&
+    Number.isFinite(macdLinePrevious) &&
+    macdLine > macdLinePrevious;
 
 
   // ----------------------------------------------------------
@@ -502,15 +501,15 @@ function calculateBuySignal(candles) {
   // ----------------------------------------------------------
 
   const avgVolume =
-    sma(
-      volumes,
+    simpleAverageVolume(
+      candles,
+      i,
       VOLUME_LENGTH
     );
 
   const volumeStrong =
-    avgVolume !== null &&
-    volumes[i] >
-      avgVolume * VOLUME_MULTIPLIER;
+    Number.isFinite(avgVolume) &&
+    volume > avgVolume * VOLUME_MULTIPLIER;
 
 
   // ----------------------------------------------------------
@@ -518,12 +517,11 @@ function calculateBuySignal(candles) {
   // ----------------------------------------------------------
 
   const bullishCandle =
-    closes[i] > opens[i];
+    close > open;
 
   const strongClose =
     candleRange > 0 &&
-    closes[i] >=
-      lows[i] + candleRange * 0.60;
+    close >= low + candleRange * 0.60;
 
   const recoveryCandle =
     bullishCandle &&
@@ -536,32 +534,33 @@ function calculateBuySignal(candles) {
 
   let score = 0;
 
-  if (nearBottom)
+  if (nearBottom) {
     score += 2;
+  }
 
-  if (strongDrop)
+  if (strongDrop) {
     score += 1;
+  }
 
-  if (rsiCondition)
+  if (rsiCondition) {
     score += 1;
+  }
 
-  if (emaRecovery)
+  if (emaRecovery) {
     score += 1;
+  }
 
-  if (emaTurningUp)
+  if (emaTurningUp) {
     score += 1;
+  }
 
-  if (
-    macdImproving &&
-    macdTurningUp
-  )
+  if (macdImproving && macdTurningUp) {
     score += 1;
+  }
 
-  if (
-    volumeStrong &&
-    recoveryCandle
-  )
+  if (volumeStrong && recoveryCandle) {
     score += 1;
+  }
 
 
   // ----------------------------------------------------------
@@ -569,8 +568,7 @@ function calculateBuySignal(candles) {
   // ----------------------------------------------------------
 
   const lastDrop =
-    closes[i] <
-    closes[i - 1] * 0.985;
+    close < previous.close * 0.985;
 
   const safeRecovery =
     !lastDrop;
@@ -588,151 +586,188 @@ function calculateBuySignal(candles) {
 
 
   // ----------------------------------------------------------
-  // FINAL BUY
+  // BUY
   // ----------------------------------------------------------
 
-  return (
+  const buySignal =
     score >= REQUIRED_SCORE &&
     bottomQualitySignal &&
-    safeRecovery
-  );
+    safeRecovery;
+
+
+  return {
+
+    buySignal,
+
+    summary: {
+      score,
+      change24: round(change24, 2),
+      distanceFromLow: round(distanceFromLow, 2),
+      rsi: round(rsi, 2),
+      bottomTests,
+      close: round(close, 8)
+    }
+  };
 }
 
 
 // ============================================================
-// OKX PUBLIC MARKET DATA
+// TRADE STATE
 // ============================================================
 
-async function fetchMarketCandles(symbol) {
-
-  // BTCUSDT -> BTC-USDT
-  const base =
-    symbol.replace("USDT", "");
-
-  const instId =
-    `${base}-USDT`;
-
-  const url =
-    `https://www.okx.com/api/v5/market/candles` +
-    `?instId=${instId}` +
-    `&bar=15m` +
-    `&limit=130`;
-
-  const response =
-    await fetch(url, {
-      headers: {
-        "User-Agent":
-          "crypto-bottom-tracker"
-      }
-    });
-
-  if (!response.ok) {
-
-    throw new Error(
-      `OKX ${symbol}: ${response.status}`
-    );
-  }
-
-  const json =
-    await response.json();
-
-  if (
-    json.code !== "0" ||
-    !Array.isArray(json.data)
-  ) {
-
-    throw new Error(
-      `OKX ${symbol}: invalid data`
-    );
-  }
-
-  /*
-    OKX candle format:
-
-    [
-      timestamp,
-      open,
-      high,
-      low,
-      close,
-      volume,
-      volumeCurrency,
-      volumeCurrencyQuote,
-      confirm
-    ]
-  */
-
-  const candles =
-    json.data
-      .reverse()
-      .map(k => ({
-        time: Number(k[0]),
-        open: Number(k[1]),
-        high: Number(k[2]),
-        low: Number(k[3]),
-        close: Number(k[4]),
-        volume: Number(k[5]),
-        confirmed: k[8] === "1"
-      }));
-
-
-  // Keep only confirmed/closed candles
-  const confirmed =
-    candles.filter(
-      c => c.confirmed
-    );
-
-  return confirmed;
-}
-
-
-// ============================================================
-// D1 TABLE
-// ============================================================
-
-async function ensureTable(env) {
-
-  await env.DB
-    .prepare(`
-      CREATE TABLE IF NOT EXISTS trades (
-        symbol TEXT PRIMARY KEY,
-        active INTEGER NOT NULL DEFAULT 0,
-        entry REAL,
-        tp REAL,
-        sl REAL,
-        entry_time INTEGER
-      )
-    `)
-    .run();
-}
-
-
-// ============================================================
-// GET TRADE
-// ============================================================
-
-async function getTrade(
+async function updateTrade(
   env,
-  symbol
+  symbol,
+  analysis,
+  candles
 ) {
 
-  return await env.DB
-    .prepare(
-      `SELECT * FROM trades WHERE symbol = ?`
+  const state =
+    await getTrade(env, symbol);
+
+  const currentPrice =
+    candles[candles.length - 1].close;
+
+
+  // ==========================================================
+  // ACTIVE TRADE
+  // ==========================================================
+
+  if (state && state.active === 1) {
+
+    const entry = Number(state.entry);
+    const tp = Number(state.tp);
+    const sl = Number(state.sl);
+
+    /*
+      IMPORTANT:
+      We check TP/SL regardless of whether
+      the current V2.4 BUY signal still exists.
+    */
+
+    if (currentPrice >= tp) {
+
+      await closeTrade(env, symbol);
+
+      return {
+        status: "CLOSED TP",
+        entry: round(entry, 8),
+        exit: round(currentPrice, 8),
+        result: `+${TP_PERCENT}%`
+      };
+    }
+
+
+    if (currentPrice <= sl) {
+
+      await closeTrade(env, symbol);
+
+      return {
+        status: "CLOSED SL",
+        entry: round(entry, 8),
+        exit: round(currentPrice, 8),
+        result: `-${SL_PERCENT}%`
+      };
+    }
+
+
+    return {
+      status: "OPEN",
+      entry: round(entry, 8),
+      tp: round(tp, 8),
+      sl: round(sl, 8),
+      current: round(currentPrice, 8)
+    };
+  }
+
+
+  // ==========================================================
+  // NEW BUY
+  // ==========================================================
+
+  if (analysis.buySignal) {
+
+    const entry = currentPrice;
+
+    const tp =
+      entry * (1 + TP_PERCENT / 100);
+
+    const sl =
+      entry * (1 - SL_PERCENT / 100);
+
+    await openTrade(
+      env,
+      symbol,
+      entry,
+      tp,
+      sl,
+      Date.now()
+    );
+
+
+    // Telegram ONLY HERE
+    await sendTelegram(
+      env,
+      formatBuyMessage(
+        symbol,
+        entry,
+        tp,
+        sl,
+        analysis
+      )
+    );
+
+
+    return {
+      status: "NEW BUY",
+      entry: round(entry, 8),
+      tp: round(tp, 8),
+      sl: round(sl, 8)
+    };
+  }
+
+
+  return {
+    status: "WAIT"
+  };
+}
+
+
+// ============================================================
+// D1 DATABASE
+// ============================================================
+
+async function initDatabase(env) {
+
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS trades (
+      symbol TEXT PRIMARY KEY,
+      active INTEGER NOT NULL DEFAULT 0,
+      entry REAL,
+      tp REAL,
+      sl REAL,
+      entry_time INTEGER
     )
+  `).run();
+}
+
+
+async function getTrade(env, symbol) {
+
+  return await env.DB
+    .prepare(`
+      SELECT *
+      FROM trades
+      WHERE symbol = ?
+    `)
     .bind(symbol)
     .first();
 }
 
 
-// ============================================================
-// SAVE TRADE
-// ============================================================
-
-async function saveTrade(
+async function openTrade(
   env,
   symbol,
-  active,
   entry,
   tp,
   sl,
@@ -741,13 +776,21 @@ async function saveTrade(
 
   await env.DB
     .prepare(`
-      INSERT OR REPLACE INTO trades
-      (symbol, active, entry, tp, sl, entry_time)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO trades
+        (symbol, active, entry, tp, sl, entry_time)
+      VALUES
+        (?, 1, ?, ?, ?, ?)
+
+      ON CONFLICT(symbol)
+      DO UPDATE SET
+        active = 1,
+        entry = excluded.entry,
+        tp = excluded.tp,
+        sl = excluded.sl,
+        entry_time = excluded.entry_time
     `)
     .bind(
       symbol,
-      active ? 1 : 0,
       entry,
       tp,
       sl,
@@ -757,14 +800,29 @@ async function saveTrade(
 }
 
 
+async function closeTrade(env, symbol) {
+
+  await env.DB
+    .prepare(`
+      UPDATE trades
+      SET
+        active = 0,
+        entry = NULL,
+        tp = NULL,
+        sl = NULL,
+        entry_time = NULL
+      WHERE symbol = ?
+    `)
+    .bind(symbol)
+    .run();
+}
+
+
 // ============================================================
 // TELEGRAM
 // ============================================================
 
-async function sendTelegram(
-  env,
-  text
-) {
+async function sendTelegram(env, message) {
 
   const token =
     env.TELEGRAM_BOT_TOKEN;
@@ -773,7 +831,6 @@ async function sendTelegram(
     env.TELEGRAM_CHAT_ID;
 
   if (!token || !chatId) {
-
     throw new Error(
       "Telegram secrets are missing"
     );
@@ -783,199 +840,374 @@ async function sendTelegram(
     `https://api.telegram.org/bot${token}/sendMessage`;
 
   const response =
-    await fetch(
-      url,
-      {
-        method: "POST",
+    await fetch(url, {
+      method: "POST",
 
-        headers: {
-          "Content-Type":
-            "application/json"
-        },
+      headers: {
+        "Content-Type":
+          "application/json"
+      },
 
-        body: JSON.stringify({
-          chat_id: chatId,
-          text
-        })
-      }
-    );
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message
+      })
+    });
 
   if (!response.ok) {
 
-    const errorText =
+    const text =
       await response.text();
 
     throw new Error(
-      `Telegram ${response.status}: ${errorText}`
+      `Telegram HTTP ${response.status}: ${text}`
+    );
+  }
+
+  const result =
+    await response.json();
+
+  if (!result.ok) {
+    throw new Error(
+      `Telegram error: ${result.description || "Unknown error"}`
     );
   }
 }
 
 
 // ============================================================
-// PROCESS ONE COIN
+// TELEGRAM MESSAGE
 // ============================================================
 
-async function processCoin(
-  env,
-  symbol
+function formatBuyMessage(
+  symbol,
+  entry,
+  tp,
+  sl,
+  analysis
 ) {
 
-  try {
+  const coin =
+    symbol.replace("USDT", "");
 
-    const candles =
-      await fetchMarketCandles(symbol);
+  return (
+    `🟢 NEW BUY\n\n` +
+    `💰 ${coin}/USDT\n` +
+    `⏱ 15m\n\n` +
+    `📌 Entry: ${formatPrice(entry)}\n` +
+    `🎯 TP: ${formatPrice(tp)} (+${TP_PERCENT}%)\n` +
+    `🛑 SL: ${formatPrice(sl)} (-${SL_PERCENT}%)\n\n` +
+    `⭐ Score: ${analysis.summary.score}/8\n` +
+    `📉 24H: ${analysis.summary.change24}%\n` +
+    `📍 From Bottom: ${analysis.summary.distanceFromLow}%\n` +
+    `📊 RSI: ${analysis.summary.rsi}\n` +
+    `🔄 Bottom Tests: ${analysis.summary.bottomTests}\n\n` +
+    `Source: OKX`
+  );
+}
 
-    if (candles.length < 120) {
 
-      throw new Error(
-        `Not enough closed candles`
-      );
+// ============================================================
+// RSI
+// ============================================================
+
+function calculateRSI(candles, length) {
+
+  const result =
+    new Array(candles.length).fill(NaN);
+
+  if (candles.length <= length) {
+    return result;
+  }
+
+  let gainSum = 0;
+  let lossSum = 0;
+
+  for (let i = 1; i <= length; i++) {
+
+    const change =
+      candles[i].close -
+      candles[i - 1].close;
+
+    if (change > 0) {
+      gainSum += change;
+    } else {
+      lossSum += Math.abs(change);
     }
+  }
 
-    const latest =
-      candles[candles.length - 1];
+  let avgGain =
+    gainSum / length;
 
-    const trade =
-      await getTrade(
-        env,
-        symbol
-      );
+  let avgLoss =
+    lossSum / length;
+
+  if (avgLoss === 0) {
+    result[length] = 100;
+  } else {
+
+    const rs =
+      avgGain / avgLoss;
+
+    result[length] =
+      100 - (100 / (1 + rs));
+  }
 
 
-    // ========================================================
-    // EXISTING OPEN TRADE
-    // ========================================================
+  for (let i = length + 1; i < candles.length; i++) {
+
+    const change =
+      candles[i].close -
+      candles[i - 1].close;
+
+    const gain =
+      Math.max(change, 0);
+
+    const loss =
+      Math.max(-change, 0);
+
+    avgGain =
+      ((avgGain * (length - 1)) + gain) /
+      length;
+
+    avgLoss =
+      ((avgLoss * (length - 1)) + loss) /
+      length;
+
+    if (avgLoss === 0) {
+
+      result[i] = 100;
+
+    } else {
+
+      const rs =
+        avgGain / avgLoss;
+
+      result[i] =
+        100 - (100 / (1 + rs));
+    }
+  }
+
+  return result;
+}
+
+
+// ============================================================
+// EMA
+// ============================================================
+
+function calculateEMA(candles, length) {
+
+  const result =
+    new Array(candles.length).fill(NaN);
+
+  if (candles.length < length) {
+    return result;
+  }
+
+  let sum = 0;
+
+  for (let i = 0; i < length; i++) {
+    sum += candles[i].close;
+  }
+
+  let ema =
+    sum / length;
+
+  result[length - 1] = ema;
+
+  const multiplier =
+    2 / (length + 1);
+
+  for (let i = length; i < candles.length; i++) {
+
+    ema =
+      (candles[i].close - ema) *
+      multiplier +
+      ema;
+
+    result[i] = ema;
+  }
+
+  return result;
+}
+
+
+// ============================================================
+// MACD
+// ============================================================
+
+function calculateMACD(candles) {
+
+  const ema12 =
+    calculateEMA(candles, 12);
+
+  const ema26 =
+    calculateEMA(candles, 26);
+
+  const macd =
+    new Array(candles.length).fill(NaN);
+
+  for (let i = 0; i < candles.length; i++) {
 
     if (
-      trade &&
-      trade.active === 1
+      Number.isFinite(ema12[i]) &&
+      Number.isFinite(ema26[i])
     ) {
-
-      const price =
-        latest.close;
-
-
-      // SL
-      if (
-        price <= trade.sl
-      ) {
-
-        await saveTrade(
-          env,
-          symbol,
-          false,
-          null,
-          null,
-          null,
-          null
-        );
-
-        return {
-          symbol,
-          status: "SL",
-          price
-        };
-      }
+      macd[i] =
+        ema12[i] - ema26[i];
+    }
+  }
 
 
-      // TP
-      if (
-        price >= trade.tp
-      ) {
+  const signal =
+    new Array(candles.length).fill(NaN);
 
-        await saveTrade(
-          env,
-          symbol,
-          false,
-          null,
-          null,
-          null,
-          null
-        );
+  const histogram =
+    new Array(candles.length).fill(NaN);
 
-        return {
-          symbol,
-          status: "TP",
-          price
-        };
-      }
+  const validMacd = [];
+
+  for (let i = 0; i < macd.length; i++) {
+
+    if (Number.isFinite(macd[i])) {
+      validMacd.push({
+        index: i,
+        value: macd[i]
+      });
+    }
+  }
 
 
-      // Still OPEN
-      return {
-        symbol,
-        status: "OPEN",
-        entry: trade.entry,
-        tp: trade.tp,
-        sl: trade.sl,
-        price
-      };
+  if (validMacd.length >= 9) {
+
+    let sum = 0;
+
+    for (let j = 0; j < 9; j++) {
+      sum += validMacd[j].value;
     }
 
+    let sig =
+      sum / 9;
 
-    // ========================================================
-    // WAIT / NEW BUY
-    // ========================================================
+    signal[validMacd[8].index] =
+      sig;
 
-    const buySignal =
-      calculateBuySignal(
-        candles
-      );
+    const multiplier =
+      2 / (9 + 1);
 
+    for (let j = 9; j < validMacd.length; j++) {
 
-    if (!buySignal) {
+      sig =
+        (validMacd[j].value - sig) *
+        multiplier +
+        sig;
 
-      return {
-        symbol,
-        status: "WAIT",
-        price: latest.close
-      };
+      signal[validMacd[j].index] =
+        sig;
     }
+  }
 
 
-    // ========================================================
-    // NEW BUY
-    // ========================================================
+  for (let i = 0; i < candles.length; i++) {
 
-    const entry =
-      latest.close;
-
-    const tp =
-      entry * (1 + TAKE_PROFIT);
-
-    const sl =
-      entry * (1 - STOP_LOSS);
+    if (
+      Number.isFinite(macd[i]) &&
+      Number.isFinite(signal[i])
+    ) {
+      histogram[i] =
+        macd[i] - signal[i];
+    }
+  }
 
 
-    await saveTrade(
-      env,
-      symbol,
-      true,
-      entry,
-      tp,
-      sl,
-      latest.time
-    );
+  return {
+    macd,
+    signal,
+    histogram
+  };
+}
 
 
-    const message =
-      `🟢 NEW BUY\n\n` +
-      `Coin: ${symbol}\n` +
-      `Entry: ${entry}\n` +
-      `TP: ${tp}\n` +
-      `SL: ${sl}\n\n` +
-      `Strategy: 24H Bottom Recovery V2.4\n` +
-      `Timeframe: 15m\n` +
-      `Data: OKX`;
+// ============================================================
+// VOLUME AVERAGE
+// ============================================================
+
+function simpleAverageVolume(
+  candles,
+  index,
+  length
+) {
+
+  const start =
+    Math.max(0, index - length + 1);
+
+  let sum = 0;
+  let count = 0;
+
+  for (let i = start; i <= index; i++) {
+
+    sum += candles[i].volume;
+    count++;
+  }
+
+  return count > 0
+    ? sum / count
+    : NaN;
+}
 
 
-    await sendTelegram(
-      env,
-      message
-    );
+// ============================================================
+// HELPERS
+// ============================================================
+
+function round(value, decimals = 2) {
+
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const factor =
+    Math.pow(10, decimals);
+
+  return Math.round(
+    value * factor
+  ) / factor;
+}
 
 
-    return {
-      symbol,
-      status: "NEW BUY",
+function formatPrice(value) {
+
+  if (!Number.isFinite(value)) {
+    return "N/A";
+  }
+
+  if (value >= 1000) {
+    return value.toFixed(2);
+  }
+
+  if (value >= 1) {
+    return value.toFixed(4);
+  }
+
+  if (value >= 0.01) {
+    return value.toFixed(5);
+  }
+
+  return value.toFixed(8);
+}
+
+
+function json(data, status = 200) {
+
+  return new Response(
+    JSON.stringify(data, null, 2),
+    {
+      status,
+      headers: {
+        "Content-Type":
+          "application/json; charset=utf-8"
+      }
+    }
+  );
+}
