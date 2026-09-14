@@ -1,446 +1,156 @@
 const COINS = [
-  "BTCUSDT",
-  "ETHUSDT",
-  "BNBUSDT",
-  "SOLUSDT",
-  "XRPUSDT",
-  "LINKUSDT",
-  "AVAXUSDT",
-  "SUIUSDT",
-  "LTCUSDT",
-  "DOGEUSDT",
-  "ADAUSDT",
-  "TRXUSDT",
-  "DOTUSDT",
-  "SHIBUSDT",
-  "UNIUSDT",
-  "AAVEUSDT",
-  "NEARUSDT",
-  "ATOMUSDT",
-  "FILUSDT",
-  "ARBUSDT",
-  "OPUSDT",
-  "INJUSDT",
-  "SEIUSDT",
-  "TIAUSDT"
+  "BTC", "ETH", "BNB", "SOL", "XRP", "LINK",
+  "AVAX", "SUI", "LTC", "DOGE", "ADA", "TRX",
+  "DOT", "SHIB", "UNI", "AAVE", "NEAR", "ATOM",
+  "FIL", "ARB", "OP", "INJ", "SEI", "TIA"
 ];
 
-const BATCH_SIZE = 3;
-const DELAY_BETWEEN_BATCHES = 1500;
-const MAX_RETRIES = 3;
-
-
-// ============================================================
-// WORKER
-// ============================================================
+const CANDLE_COUNT = 130;
 
 export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
 
-  async fetch(request, env) {
-
-    try {
-
-      await initDatabase(env);
-
-      const url = new URL(request.url);
-
-      if (url.pathname === "/") {
-
-        return json({
-          ok: true,
-          service: "24H Bottom Recovery V2.4",
-          source: "OKX",
-          timeframe: "15m",
-          coins: COINS.length
-        });
-
-      }
-
-      if (url.pathname === "/run") {
-
-        const results = [];
-
-        for (
-          let start = 0;
-          start < COINS.length;
-          start += BATCH_SIZE
-        ) {
-
-          const batch =
-            COINS.slice(
-              start,
-              start + BATCH_SIZE
-            );
-
-          const batchResults =
-            await Promise.all(
-              batch.map(
-                symbol => checkCoin(symbol)
-              )
-            );
-
-          results.push(...batchResults);
-
-          if (
-            start + BATCH_SIZE <
-            COINS.length
-          ) {
-
-            await sleep(
-              DELAY_BETWEEN_BATCHES
-            );
-
-          }
-
-        }
-
-        return json({
-          ok: true,
-          source: "OKX",
-          timeframe: "15m",
-          checked: COINS.length,
-          results: results
-        });
-
-      }
-
-      return new Response(
-        "Not Found",
-        { status: 404 }
-      );
-
-    } catch (error) {
-
+    // الصفحة الرئيسية
+    if (url.pathname === "/") {
       return json({
-        ok: false,
-        error: error.message
-      }, 500);
-
+        ok: true,
+        service: "Coinbase 15m Test",
+        coins: COINS.length,
+        candles_required: CANDLE_COUNT
+      });
     }
 
-  },
+    // اختبار العملات
+    if (url.pathname === "/run") {
+      const results = [];
 
+      for (const coin of COINS) {
+        const result = await testCoin(coin);
+        results.push(result);
 
-  async scheduled(event, env, ctx) {
+        // تأخير صغير لتجنب rate limit
+        await sleep(250);
+      }
 
-    ctx.waitUntil(
-      scheduledRun(env)
-    );
+      const working = results.filter(x => x.status === "OK");
+      const failed = results.filter(x => x.status !== "OK");
 
+      return json({
+        ok: true,
+        source: "Coinbase Exchange",
+        timeframe: "15m",
+        total: COINS.length,
+        working: working.length,
+        failed: failed.length,
+        results
+      });
+    }
+
+    return new Response("Not Found", { status: 404 });
   }
-
 };
 
 
-// ============================================================
-// CHECK ONE COIN
-// ============================================================
+async function testCoin(coin) {
 
-async function checkCoin(symbol) {
+  const product = `${coin}-USD`;
+
+  // آخر 32.5 ساعة تقريباً
+  // 130 × 15 دقيقة = 1950 دقيقة
+  const end = Math.floor(Date.now() / 1000);
+  const start = end - (CANDLE_COUNT * 15 * 60);
+
+  const endpoint =
+    `https://api.exchange.coinbase.com/products/${product}/candles` +
+    `?granularity=900` +
+    `&start=${start}` +
+    `&end=${end}`;
 
   try {
 
-    const candles =
-      await getCandlesWithRetry(symbol);
-
-    return {
-
-      symbol: symbol,
-
-      status: "OK",
-
-      candles: candles.length,
-
-      price:
-        candles.length > 0
-          ? candles[candles.length - 1].close
-          : null
-
-    };
-
-  } catch (error) {
-
-    return {
-
-      symbol: symbol,
-
-      status: "ERROR",
-
-      error: error.message
-
-    };
-
-  }
-
-}
-
-
-// ============================================================
-// OKX REQUEST WITH RETRY
-// ============================================================
-
-async function getCandlesWithRetry(symbol) {
-
-  let lastError =
-    "Unknown error";
-
-  for (
-    let attempt = 1;
-    attempt <= MAX_RETRIES;
-    attempt++
-  ) {
-
-    try {
-
-      return await getCandles(symbol);
-
-    } catch (error) {
-
-      lastError =
-        error.message;
-
-      if (
-        !lastError.includes("429")
-      ) {
-
-        throw error;
-
-      }
-
-      if (
-        attempt < MAX_RETRIES
-      ) {
-
-        const waitTime =
-          2000 * attempt;
-
-        await sleep(waitTime);
-
-      }
-
-    }
-
-  }
-
-  throw new Error(
-    lastError
-  );
-
-}
-
-
-// ============================================================
-// GET OKX CANDLES
-// ============================================================
-
-async function getCandles(symbol) {
-
-  const base =
-    symbol.replace("USDT", "");
-
-  const instId =
-    base + "-USDT";
-
-  const url =
-    "https://www.okx.com/api/v5/market/candles" +
-    "?instId=" +
-    encodeURIComponent(instId) +
-    "&bar=15m" +
-    "&limit=130";
-
-  const response =
-    await fetch(url, {
-      method: "GET",
+    const response = await fetch(endpoint, {
       headers: {
         "Accept": "application/json"
       }
     });
 
-  if (!response.ok) {
-
-    throw new Error(
-      "OKX HTTP " +
-      response.status
-    );
-
-  }
-
-  const data =
-    await response.json();
-
-  if (
-    !data ||
-    data.code !== "0"
-  ) {
-
-    throw new Error(
-      "OKX: " +
-      (
-        data &&
-        data.msg
-          ? data.msg
-          : "API error"
-      )
-    );
-
-  }
-
-  if (
-    !Array.isArray(data.data)
-  ) {
-
-    throw new Error(
-      "Invalid OKX candle data"
-    );
-
-  }
-
-  const rows =
-    [...data.data].reverse();
-
-  const candles = [];
-
-  for (const row of rows) {
-
-    if (
-      !Array.isArray(row) ||
-      row.length < 9
-    ) {
-      continue;
+    if (!response.ok) {
+      return {
+        coin,
+        product,
+        status: "ERROR",
+        http: response.status,
+        candles: 0,
+        message: `HTTP ${response.status}`
+      };
     }
 
-    /*
-      OKX:
-      row[8] = confirmation
-      1 = closed
-      0 = still forming
-    */
+    const data = await response.json();
 
-    if (
-      String(row[8]) !== "1"
-    ) {
-      continue;
+    if (!Array.isArray(data) || data.length === 0) {
+      return {
+        coin,
+        product,
+        status: "ERROR",
+        http: 200,
+        candles: 0,
+        message: "No candle data"
+      };
     }
 
-    const candle = {
+    // Coinbase يعيد:
+    // [time, low, high, open, close, volume]
 
-      timestamp:
-        Number(row[0]),
+    const candles = data
+      .map(c => ({
+        time: Number(c[0]),
+        low: Number(c[1]),
+        high: Number(c[2]),
+        open: Number(c[3]),
+        close: Number(c[4]),
+        volume: Number(c[5])
+      }))
+      .sort((a, b) => a.time - b.time);
 
-      open:
-        Number(row[1]),
+    const last = candles[candles.length - 1];
 
-      high:
-        Number(row[2]),
-
-      low:
-        Number(row[3]),
-
-      close:
-        Number(row[4]),
-
-      volume:
-        Number(row[5])
-
+    return {
+      coin,
+      product,
+      status: "OK",
+      http: 200,
+      candles: candles.length,
+      last_close: last.close,
+      last_candle: new Date(last.time * 1000).toISOString()
     };
-
-    if (
-      !Number.isFinite(
-        candle.close
-      )
-    ) {
-      continue;
-    }
-
-    candles.push(candle);
-
-  }
-
-  return candles;
-
-}
-
-
-// ============================================================
-// DATABASE
-// ============================================================
-
-async function initDatabase(env) {
-
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS trades (
-      symbol TEXT PRIMARY KEY,
-      active INTEGER NOT NULL DEFAULT 0,
-      entry REAL,
-      tp REAL,
-      sl REAL,
-      entry_time INTEGER
-    )
-  `).run();
-
-}
-
-
-// ============================================================
-// SCHEDULED TEST
-// ============================================================
-
-async function scheduledRun(env) {
-
-  try {
-
-    await initDatabase(env);
-
-    console.log(
-      "Scheduled OKX test started"
-    );
 
   } catch (error) {
 
-    console.log(
-      "Scheduled error:",
-      error.message
-    );
-
+    return {
+      coin,
+      product,
+      status: "ERROR",
+      http: 0,
+      candles: 0,
+      message: error.message
+    };
   }
-
 }
 
-
-// ============================================================
-// HELPERS
-// ============================================================
 
 function sleep(ms) {
-
-  return new Promise(
-    resolve => setTimeout(
-      resolve,
-      ms
-    )
-  );
-
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 
-function json(
-  data,
-  status = 200
-) {
-
+function json(data) {
   return new Response(
-    JSON.stringify(
-      data,
-      null,
-      2
-    ),
+    JSON.stringify(data, null, 2),
     {
-      status: status,
       headers: {
-        "Content-Type":
-          "application/json"
+        "Content-Type": "application/json"
       }
     }
   );
-
 }
